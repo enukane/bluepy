@@ -1,6 +1,11 @@
 from btle import UUID, Peripheral, DefaultDelegate
 import struct
 import math
+import threading
+import time
+import os
+import socket
+import json
 
 def _TI_UUID(val):
     return UUID("%08X-0451-4000-b000-000000000000" % (0xF0000000+val))
@@ -220,6 +225,50 @@ class KeypressDelegate(DefaultDelegate):
     def onButtonDown(self, but):
         print ( "** " + self._button_desc[but] + " DOWN")
 
+class SocketThread(threading.Thread):
+    SOCKNAME = "/tmp/ble.sock"
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.irtemp_object = 0
+        self.irtemp_ambient = 0
+        self.humid_temp = 0
+        self.humid_humidity= 0
+        self.bar_temp = 0
+        self.bar_press = 0
+        self.accelerometer = (0, 0, 0)
+        self.magnetometer = (0, 0, 0)
+        self.gyroscope = (0, 0, 0)
+        self.sock = socket.socket(socket.AF_UNIX)
+        if os.path.exists(SocketThread.SOCKNAME):
+            os.unlink(SocketThread.SOCKNAME)
+        self.sock.bind(SocketThread.SOCKNAME)
+        self.sock.listen(10)
+
+    def generate_dict(self):
+        dict = {
+            "irtemp_object"     : self.irtemp_object,
+            "irtemp_ambient"    : self.irtemp_ambient,
+            "humid_temp"        : self.humid_temp,
+            "humid_humidity"    : self.humid_humidity,
+            "bar_temp"          : self.bar_temp,
+            "bar_press"         : self.bar_press,
+            "accelerometer"     : list(self.accelerometer),
+            "magnetometer"      : list(self.magnetometer),
+            "gyroscope"         : list(self.gyroscope)
+                        }
+        return dict
+
+
+    def run(self):
+        print " ==== subthread run ==== "
+        while True:
+            s, addr = self.sock.accept()
+            print "connected from: ", addr
+            data = json.dumps(self.generate_dict())
+            print "sending : ", data
+            s.sendall(json.dumps(self.generate_dict()) + '\n')
+            s.close()
+
 if __name__ == "__main__":
     import time
     import sys
@@ -246,6 +295,9 @@ if __name__ == "__main__":
     print('Connecting to ' + arg.host)
     tag = SensorTag(arg.host)
 
+    th = SocketThread()
+    th.start()
+
     # Enabling selected sensors
     if arg.temperature or arg.all:
         tag.IRtemperature.enable()
@@ -270,17 +322,29 @@ if __name__ == "__main__":
     counter=1
     while True:
        if arg.temperature or arg.all:
-           print('Temp: ', tag.IRtemperature.read())
+           irtemp = tag.IRtemperature.read()
+           print('Temp: ', irtemp)
+           th.irtemp_object = irtemp[0]
+           th.irtemp_ambient = irtemp[1]
        if arg.humidity or arg.all:
-           print("Humidity: ", tag.humidity.read())
+           humid = tag.humidity.read()
+           print("Humidity: ", humid)
+           th.humid_temp = humid[0]
+           th.humid_humidity = humid[1]
        if arg.barometer or arg.all:
-           print("Barometer: ", tag.barometer.read())
+           bar = tag.barometer.read()
+           print("Barometer: ", bar)
+           th.bar_temp = bar[0]
+           th.bar_press = bar[1]
        if arg.accelerometer or arg.all:
-           print("Accelerometer: ", tag.accelerometer.read())
+           th.accelerometer = tag.accelerometer.read()
+           print("Accelerometer: ", th.accelerometer)
        if arg.magnetometer or arg.all:
-           print("Magnetometer: ", tag.magnetometer.read())
+           th.magnetometer = tag.magnetometer.read()
+           print("Magnetometer: ", th.magnetometer)
        if arg.gyroscope or arg.all:
-           print("Gyroscope: ", tag.gyroscope.read())
+           th.gyroscope = tag.gyroscope.read()
+           print("Gyroscope: ", th.gyroscope)
        if counter >= arg.count and arg.count != 0:
            break
        counter += 1
